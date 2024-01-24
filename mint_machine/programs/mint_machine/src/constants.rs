@@ -1,0 +1,1 @@
+pub const NFT_VAULT_POOL_SEED: &str = "nft_vault_pool";

@@ -1,0 +1,162 @@
+import assert from "assert";
+import * as anchor from "@project-serum/anchor";
+import { Program, BN } from "@project-serum/anchor";
+import {
+    Keypair,
+    PublicKey,
+    SystemProgram,
+    LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
+import {
+    Orao,
+    networkStateAccountAddress,
+    randomnessAccountAddress,
+    FulfillBuilder,
+    InitBuilder,
+} from "@orao-network/solana-vrf";
+import { Orao as OraoIdl } from "../target/types/orao";
+import nacl from "tweetnacl";
+
+describe("russian-roulette", () => {
+    const provider = anchor.AnchorProvider.env();
+    anchor.setProvider(provider);
+
+    const program = anchor.workspace
+        .Orao as Program<OraoIdl>;
+    const vrf = new Orao(provider);
+
+    // This accounts are for test VRF.
+    const treasury = provider.wallet;
+    const fulfillmentAuthority = Keypair.generate();
+
+    // Initial force for russian-roulette
+    let force = Keypair.generate().publicKey;
+    // Player state account address won't change during the tests.
+    const [playerState] = PublicKey.findProgramAddressSync(
+        [
+            Buffer.from("russian-roulette-player-state"),
+            provider.wallet.publicKey.toBuffer(),
+        ],
+        program.programId
+    );
+
+    // This helper will play a single round of russian-roulette.
+    async function spinAndPullTheTrigger(prevForce: Buffer, force: Buffer) {
+        const prevRound = randomnessAccountAddress(prevForce);
+        const random = randomnessAccountAddress(force);
+
+        await program.methods
+            .spinAndPullTheTrigger([...force])
+            .accounts({
+                player: provider.wallet.publicKey,
+                playerState,
+                prevRound,
+                vrf: vrf.programId,
+                config: networkStateAccountAddress(),
+                treasury: treasury.publicKey,
+                random,
+                systemProgram: SystemProgram.programId,
+            })
+            .rpc();
+    }
+
+    // This helper will fulfill randomness for our test VRF.
+    async function emulateFulfill(seed: Buffer) {
+        let signature = nacl.sign.detached(
+            seed,
+            fulfillmentAuthority.secretKey
+        );
+        await new FulfillBuilder(vrf, seed).rpc(
+            fulfillmentAuthority.publicKey,
+            signature
+        );
+    }
+
+    it("request randomness", async () => {
+        const [seed, tx] = await (await vrf.request()).rpc();
+        console.log("Your transaction is " + tx);
+
+        // Await fulfilled randomness (default commitment is "finalized"):
+        const randomness = await vrf.waitFulfilled(seed);
+        console.log("Your randomness is " + randomness.fulfilled());
+    })
+
+    before(async () => {
+        // Initialize test VRF
+        const fee = 2 * LAMPORTS_PER_SOL;
+        const fulfillmentAuthorities = [fulfillmentAuthority.publicKey];
+        const configAuthority = Keypair.generate();
+
+        // await new InitBuilder(
+        //     vrf,
+        //     configAuthority.publicKey,
+        //     treasury.publicKey,
+        //     fulfillmentAuthorities,
+        //     new BN(fee)
+        // ).rpc();
+    });
+
+    it("spin and pull the trigger", async () => {
+        await spinAndPullTheTrigger(Buffer.alloc(32), force.toBuffer());
+
+        const playerStateAcc = await program.account.playerState.fetch(
+            playerState
+        );
+
+        assert.ok(Buffer.from(playerStateAcc.force).equals(force.toBuffer()));
+        assert.ok(playerStateAcc.rounds.eq(new BN(1)));
+    });
+
+    it("play until dead", async () => {
+        let currentNumberOfRounds = 1;
+        let prevForce = force;
+
+        while (true) {
+            let [randomness, _] = await Promise.all([vrf.waitFulfilled(force.toBuffer()), emulateFulfill(force.toBuffer())]);
+
+            assert.ok(
+                !Buffer.from(randomness.randomness).equals(Buffer.alloc(64))
+            );
+
+            if (
+                Buffer.from(randomness.fulfilled()).readBigUInt64LE() %
+                BigInt(6) ===
+                BigInt(0)
+            ) {
+                console.log("The player is dead");
+                break;
+            } else {
+                console.log("The player is alive");
+            }
+
+            // Run another round
+            prevForce = force;
+            force = Keypair.generate().publicKey;
+            await spinAndPullTheTrigger(prevForce.toBuffer(), force.toBuffer());
+
+            const playerStateAcc = await program.account.playerState.fetch(
+                playerState
+            );
+
+            assert.ok(
+                Buffer.from(playerStateAcc.force).equals(force.toBuffer())
+            );
+            assert.ok(
+                playerStateAcc.rounds.eq(new BN(++currentNumberOfRounds))
+            );
+        }
+    });
+
+    it("can't play anymore", async () => {
+        const prevForce = force;
+        force = Keypair.generate().publicKey;
+        try {
+            await spinAndPullTheTrigger(prevForce.toBuffer(), force.toBuffer());
+        } catch (e) {
+            assert.equal(e.error.errorCode.code, "PlayerDead");
+            return;
+        }
+
+        assert.ok(false, "Instruction invocation should fail");
+    });
+});

@@ -1,0 +1,22 @@
+[package]
+name = "gift"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "gift"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = {version = "0.25.0", features = ["init-if-needed"]}
+anchor-spl = "0.25.0"
+mpl-token-metadata = { version = "1.6.3", features = ["no-entrypoint"] }
+spl-token-metadata = { version = "0.0.1", features = [ "no-entrypoint" ] }

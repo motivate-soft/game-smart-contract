@@ -1,0 +1,20 @@
+[features]
+seeds = false
+[programs.mainnet]
+#[programs.devnet]
+#[programs.localnet]
+anchor_raffle_ticket = "Hjaw5obT3bWQazo4bASgzjuP1mRgXoXMFbwVroHbWPSC"
+
+[registry]
+url = "https://anchor.projectserum.com"
+
+[provider]
+cluster = "mainnet"
+#cluster = "devnet"
+#cluster = "localnet"
+#wallet = "/Users/kob/.config/solana/id5.json"
+wallet = "~/.config/solana/Ak3BoBGB3EXwrgHCaHrURDFMXWWsJo1YMTPZ4oYKChZh_programSigner.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
